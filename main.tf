@@ -1,85 +1,85 @@
-provider "aws" {
-  region = var.region
-}
-
-module "vpc" {
-  source  = "cloudposse/vpc/aws"
-  version = "0.28.0"
-
-  cidr_block = "172.16.0.0/16"
-
-  context = module.this.context
-}
-
-module "subnets" {
-  source  = "cloudposse/dynamic-subnets/aws"
-  version = "0.39.7"
-
-  availability_zones   = var.availability_zones
-  vpc_id               = module.vpc.vpc_id
-  igw_id               = module.vpc.igw_id
-  cidr_block           = module.vpc.vpc_cidr_block
-  nat_gateway_enabled  = false
-  nat_instance_enabled = false
-
-  context = module.this.context
-}
-
-# Create a zone in order to validate fix for https://github.com/cloudposse/terraform-aws-elasticache-redis/issues/82
-resource "aws_route53_zone" "private" {
-  name = format("elasticache-redis-terratest-%s.testing.cloudposse.co", try(module.this.attributes[0], "default"))
-
-  vpc {
-    vpc_id = module.vpc.vpc_id
+locals {
+  name   = "aluminum-dev-vpc"
+  region = "us-east-1"
+  tags = {
+    Owner       = "user"
+    Environment = "development"
+    Name        = "aluminum-dev-vpc"
   }
 }
 
-module "cloudwatch_logs" {
-  source  = "cloudposse/cloudwatch-logs/aws"
-  version = "0.6.5"
 
-  context = module.this.context
+
+variable "main_region" {
+  type    = string
+  default = "us-east-1"
 }
 
-module "redis" {
-  source = "../../"
-
-  availability_zones               = var.availability_zones
-  zone_id                          = [aws_route53_zone.private.id]
-  vpc_id                           = module.vpc.vpc_id
-  allowed_security_groups          = [module.vpc.vpc_default_security_group_id]
-  subnets                          = module.subnets.private_subnet_ids
-  cluster_size                     = var.cluster_size
-  instance_type                    = var.instance_type
-  apply_immediately                = true
-  automatic_failover_enabled       = false
-  engine_version                   = var.engine_version
-  family                           = var.family
-  at_rest_encryption_enabled       = var.at_rest_encryption_enabled
-  transit_encryption_enabled       = var.transit_encryption_enabled
-  cloudwatch_metric_alarms_enabled = var.cloudwatch_metric_alarms_enabled
-
-  # Verify that we can safely change security groups (name changes forces new SG)
-  security_group_create_before_destroy = true
-  security_group_name                  = length(var.sg_name) > 0 ? [var.sg_name] : []
-
-  parameter = [
-    {
-      name  = "notify-keyspace-events"
-      value = "lK"
-    }
-  ]
-
-  security_group_delete_timeout = "5m"
-
-  log_delivery_configuration = [
-    {
-      destination      = module.cloudwatch_logs.log_group_name
-      destination_type = "cloudwatch-logs"
-      log_format       = "json"
-      log_type         = "engine-log"
-    }
-  ]
-
-  context = module.this.context
+provider "aws" {
+  region = var.main_region
 }
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "3.14.2"
+
+  name = local.name
+  cidr = "20.10.0.0/16"
+
+  azs                 = ["${var.main_region}a", "${var.main_region}b", "${var.main_region}c"]
+  private_subnets     = ["20.10.1.0/24", "20.10.2.0/24", "20.10.3.0/24"]
+  public_subnets      = ["20.10.11.0/24", "20.10.12.0/24", "20.10.13.0/24"]
+  database_subnets    = ["20.10.21.0/24", "20.10.22.0/24", "20.10.23.0/24"]
+  elasticache_subnets = ["20.10.31.0/24", "20.10.32.0/24", "20.10.33.0/24"]
+  #   redshift_subnets    = ["20.10.41.0/24", "20.10.42.0/24", "20.10.43.0/24"]
+  #   intra_subnets       = ["20.10.51.0/24", "20.10.52.0/24", "20.10.53.0/24"]
+
+  create_database_subnet_group = false
+
+  manage_default_network_acl = true
+  default_network_acl_tags   = { Name = "${local.name}-default" }
+
+  manage_default_route_table = true
+  default_route_table_tags   = { Name = "${local.name}-default" }
+
+  manage_default_security_group = true
+  default_security_group_tags   = { Name = "${local.name}-default" }
+
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  enable_nat_gateway = true
+  single_nat_gateway = true
+
+  enable_dhcp_options = true
+
+  tags = local.tags
+}
+
+module "elasticache-redis" {
+  source  = "./modules/elasticache-redis"
+  vpc_id  = module.vpc.vpc_id
+  subnets = module.vpc.elasticache_subnets
+  enabled = true
+  # region             = var.main_region
+  availability_zones = ["${var.main_region}a", "${var.main_region}b", "${var.main_region}c"]
+  namespace          = "eg"
+  stage              = "test"
+  name               = "redis-test"
+  # Using a large instance vs a micro shaves 5-10 minutes off the run time of the test
+  instance_type                    = "cache.t3.small"
+  cluster_size                     = 1
+  family                           = "redis6.x"
+  engine_version                   = "6.x"
+  at_rest_encryption_enabled       = false
+  transit_encryption_enabled       = true
+  zone_id                          = "Z09617592GHZFSYPSTCWV"
+  cloudwatch_metric_alarms_enabled = false
+}
+
+
+#resource "aws_instance" "my-instance" {
+#  ami           = module.vpc.ami_id
+#  subnet_id     = module.vpc.subnet_id
+#  instance_type = "t2.micro"
+#}
