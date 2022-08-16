@@ -8,8 +8,6 @@ locals {
   }
 }
 
-
-
 variable "main_region" {
   type    = string
   default = "us-east-1"
@@ -56,7 +54,7 @@ module "vpc" {
   tags = local.tags
 }
 
-module "elasticache-redis" {
+module "redis" {
   source  = "./modules/elasticache-redis"
   vpc_id  = module.vpc.vpc_id
   subnets = module.vpc.elasticache_subnets
@@ -77,9 +75,3 @@ module "elasticache-redis" {
   cloudwatch_metric_alarms_enabled = false
 }
 
-
-#resource "aws_instance" "my-instance" {
-#  ami           = module.vpc.ami_id
-#  subnet_id     = module.vpc.subnet_id
-#  instance_type = "t2.micro"
-#}
